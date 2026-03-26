@@ -120,14 +120,3 @@ After every major task, add one optional follow-up item:
 “Suggest one small, concrete improvement to this SKILL.md itself (keep it under 3 lines).”
 
 ---
-
-That’s it.  
-
-This version is now the cleanest, highest-leverage skill prompt we can run. It keeps you in full control, moves fast, and forces Claude to deliver something you’ll actually be proud to show the team.
-
-**Your call, product owner:**  
-- Drop it in and we’re live?  
-- Want me to run a quick test on a sample task first?  
-- Or any last tweak before we lock it?
-
-I’m ready when you are.
