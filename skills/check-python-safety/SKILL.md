@@ -224,3 +224,4 @@ litellm==1.82.6
 - **Never `import litellm`** — that is exactly how the malicious code executes. Use `importlib.metadata` or `pip show` only.
 - If both the script and inline fallback fail (e.g., no Python available), tell the user to run: `pip show litellm` and compare the version manually.
 - Exit code from the standalone script is `1` for MALICIOUS, `0` for SAFE/NOT_INSTALLED — useful for CI gates.
+- **Implement Script** - 'scripts/litellm-check-safety.py'
