@@ -139,6 +139,122 @@ def find_malicious_pth_files() -> list[Path]:
 
 
 # ─────────────────────────────────────────────
+# FORENSIC AUDIT (only with --forensic flag)
+# ─────────────────────────────────────────────
+SENSITIVE_ENV_VARS = [
+    "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "AWS_SESSION_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_KEYFILE_JSON",
+    "AZURE_CLIENT_SECRET", "AZURE_CLIENT_ID", "AZURE_TENANT_ID",
+    "GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", "CI_JOB_TOKEN",
+    "KUBECONFIG",
+    "DATABASE_URL", "DB_PASSWORD", "POSTGRES_PASSWORD", "MYSQL_PASSWORD",
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "NPM_TOKEN",
+    "SLACK_TOKEN", "STRIPE_SECRET_KEY", "TWILIO_AUTH_TOKEN",
+]
+
+# Shell patterns that indicate post-infection exfiltration activity
+_SUSPICIOUS_HISTORY_PATTERNS = [
+    "curl", "wget", "python3 -c", "bash -c", "eval $(", "exec(",
+    "base64 -d", "|sh", "| sh", "|bash", "| bash",
+]
+
+
+def scan_shell_history_for_suspicious() -> list[str]:
+    """Scan ~/.bash_history and ~/.zsh_history for suspicious shell patterns."""
+    history_files = [
+        Path.home() / ".bash_history",
+        Path.home() / ".zsh_history",
+    ]
+    hits: list[str] = []
+    for hf in history_files:
+        if not hf.exists():
+            continue
+        try:
+            lines = hf.read_text(errors="replace").splitlines()
+            for i, line in enumerate(lines, 1):
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                for pat in _SUSPICIOUS_HISTORY_PATTERNS:
+                    if pat in stripped:
+                        hits.append(f"[{hf.name}:{i}] {stripped[:120]}")
+                        break
+        except Exception:
+            pass
+    return hits
+
+
+def scan_authorized_keys() -> list[str]:
+    """Return non-comment lines from ~/.ssh/authorized_keys."""
+    ak = Path.home() / ".ssh" / "authorized_keys"
+    if not ak.exists():
+        return []
+    try:
+        return [
+            ln.strip() for ln in ak.read_text(errors="replace").splitlines()
+            if ln.strip() and not ln.startswith("#")
+        ]
+    except Exception:
+        return []
+
+
+def list_exposed_sensitive_env_vars() -> dict[str, str]:
+    """Return sensitive env vars currently set, with values masked."""
+    exposed: dict[str, str] = {}
+    for var in SENSITIVE_ENV_VARS:
+        val = os.environ.get(var)
+        if val:
+            exposed[var] = val[:4] + "***" if len(val) > 4 else "***"
+    return exposed
+
+
+def print_forensic_report(
+    history_hits: list[str],
+    auth_keys: list[str],
+    env_vars: dict[str, str],
+) -> None:
+    """Print the forensic audit section."""
+    print()
+    print("─" * 62)
+    print(bold(cyan("  FORENSIC AUDIT")))
+    print("─" * 62)
+
+    # Shell history
+    if history_hits:
+        print(yellow(f"\n  [!] Shell history — {len(history_hits)} suspicious line(s):"))
+        for line in history_hits[:10]:
+            print(f"      {line}")
+        if len(history_hits) > 10:
+            print(f"      … and {len(history_hits) - 10} more")
+    else:
+        print(green("\n  ✔  Shell history — no suspicious patterns detected"))
+
+    # Authorized keys
+    if auth_keys:
+        print(yellow(f"\n  [!] ~/.ssh/authorized_keys — {len(auth_keys)} key(s) present:"))
+        print(yellow("      Review manually for unauthorized entries:"))
+        for k in auth_keys:
+            parts = k.split()
+            display = " ".join([parts[0]] + ["<key>"] + parts[2:3]) if len(parts) >= 2 else k[:80]
+            print(f"      {display}")
+    else:
+        print(green("\n  ✔  ~/.ssh/authorized_keys — not found or empty"))
+
+    # Exposed env vars
+    if env_vars:
+        print(red(f"\n  ☠  EXPOSED CREDENTIALS IN ENVIRONMENT ({len(env_vars)} found):"))
+        print(red("      These were accessible to the malicious package:"))
+        for var, masked in env_vars.items():
+            print(red(f"      {var}={masked}"))
+        print(yellow("\n      → Rotate ALL of these credentials immediately."))
+    else:
+        print(green("\n  ✔  No high-value credentials found in environment"))
+
+    print()
+    print("─" * 62)
+
+
+# ─────────────────────────────────────────────
 # DISPLAY HELPERS
 # ─────────────────────────────────────────────
 def print_separator(char="═", width=62):
@@ -354,6 +470,10 @@ def main():
         "--json", action="store_true",
         help="Output machine-readable JSON instead of human-readable text."
     )
+    parser.add_argument(
+        "--forensic", action="store_true",
+        help="Run post-infection forensic audit: shell history, authorized_keys, exposed env vars."
+    )
     args = parser.parse_args()
 
     print_separator()
@@ -362,6 +482,21 @@ def main():
     print_separator()
 
     result = check_litellm_safety(quiet=args.json)
+
+    if args.forensic and not args.json:
+        history_hits = scan_shell_history_for_suspicious()
+        auth_keys    = scan_authorized_keys()
+        env_vars     = list_exposed_sensitive_env_vars()
+        print_forensic_report(history_hits, auth_keys, env_vars)
+    elif args.forensic and args.json:
+        history_hits = scan_shell_history_for_suspicious()
+        auth_keys    = scan_authorized_keys()
+        env_vars     = list_exposed_sensitive_env_vars()
+        result["forensic"] = {
+            "suspicious_history_lines": history_hits,
+            "authorized_keys":          auth_keys,
+            "exposed_env_vars":         list(env_vars.keys()),
+        }
 
     if args.json:
         print(json.dumps(result, indent=2))
